@@ -1,4 +1,4 @@
-# 🧠 gbrain explorer
+# 🧠 gbrain visual explorer
 
 Interactive browser visualization for a [gbrain](https://github.com/garrytan/gbrain)
 knowledge graph stored in Postgres. Ask questions in natural language, see the
