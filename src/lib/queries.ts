@@ -255,10 +255,18 @@ export async function synthesizeAnswer(
         ],
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error("synthesizeAnswer: messages API", res.status, await res.text());
+      return null;
+    }
     const data = await res.json();
-    return data.content?.[0]?.text ?? null;
-  } catch {
+    // skip non-text blocks (e.g. thinking) — the answer is the first text block
+    const text = (data.content as { type: string; text?: string }[] | undefined)?.find(
+      (b) => b.type === "text"
+    )?.text;
+    return text ?? null;
+  } catch (e) {
+    console.error("synthesizeAnswer failed:", e);
     return null;
   }
 }
