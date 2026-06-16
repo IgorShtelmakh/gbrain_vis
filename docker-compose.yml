@@ -1,0 +1,21 @@
+# gbrain_vis — Next.js app served behind the existing Caddy reverse proxy.
+# No host ports are published: Caddy reaches the container over the shared
+# `contact-finder-agent_default` network via the `gbrain_vis` alias.
+services:
+  web:
+    build: .
+    image: gbrain_vis_web
+    container_name: gbrain_vis_web
+    env_file: .env
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      proxy:
+        aliases:
+          - gbrain_vis
+
+networks:
+  proxy:
+    external: true
+    name: contact-finder-agent_default
