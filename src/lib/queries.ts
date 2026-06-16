@@ -10,6 +10,7 @@ import type {
   SearchResult,
   Stats,
   SubGraph,
+  TagCount,
 } from "./types";
 
 const DEGREE_CTE = `
@@ -273,6 +274,33 @@ export async function synthesizeAnswer(
     console.error("synthesizeAnswer failed:", e);
     return null;
   }
+}
+
+/** All tags with how many (non-deleted) pages carry each. */
+export async function getAllTags(): Promise<TagCount[]> {
+  const { rows } = await getPool().query(
+    `SELECT t.tag, count(*)::int AS count
+     FROM tags t JOIN pages p ON p.id = t.page_id AND p.deleted_at IS NULL
+     GROUP BY t.tag
+     ORDER BY count DESC, t.tag`
+  );
+  return rows;
+}
+
+/** Pages carrying a given tag, highest-degree first. */
+export async function getPagesByTag(tag: string, limit = 200): Promise<GNode[]> {
+  const { rows } = await getPool().query(
+    `WITH ${DEGREE_CTE}
+     SELECT p.id, p.title, p.type, COALESCE(d.degree, 0) AS degree
+     FROM tags t
+     JOIN pages p ON p.id = t.page_id AND p.deleted_at IS NULL
+     LEFT JOIN deg d ON d.page_id = p.id
+     WHERE t.tag = $1
+     ORDER BY d.degree DESC NULLS LAST, p.title
+     LIMIT $2`,
+    [tag, limit]
+  );
+  return rows;
 }
 
 const HISTORY_BUCKETS = new Set<HistoryBucket>(["day", "week", "month"]);
