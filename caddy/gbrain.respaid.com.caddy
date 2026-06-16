@@ -1,0 +1,8 @@
+# Routing for gbrain.respaid.com — owned by the gbrain_vis project.
+# Dropped into the edge Caddy's sites-enabled dir; the edge only carries a
+# generic `import sites-enabled/*.caddy`, so nothing gbrain-specific lives in
+# the contactfinder config.
+gbrain.respaid.com {
+	encode gzip
+	reverse_proxy gbrain_vis:3000
+}

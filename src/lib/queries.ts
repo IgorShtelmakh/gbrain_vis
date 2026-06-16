@@ -1,7 +1,11 @@
 import { getPool } from "./db";
 import type {
+  ContentTypes,
   GEdge,
   GNode,
+  History,
+  HistoryBucket,
+  HistoryPoint,
   NodeDetail,
   SearchResult,
   Stats,
@@ -269,6 +273,124 @@ export async function synthesizeAnswer(
     console.error("synthesizeAnswer failed:", e);
     return null;
   }
+}
+
+const HISTORY_BUCKETS = new Set<HistoryBucket>(["day", "week", "month"]);
+
+/** Timeline of when pages were added, bucketed and split by type. */
+export async function getHistory(bucket: HistoryBucket = "month"): Promise<History> {
+  const b: HistoryBucket = HISTORY_BUCKETS.has(bucket) ? bucket : "month";
+  const pool = getPool();
+  const [series, span, recent] = await Promise.all([
+    pool.query(
+      // date_trunc's unit is passed as a bind param (safe) — whitelisted above.
+      `SELECT date_trunc($1, created_at) AS period, type, count(*)::int AS count
+       FROM pages
+       WHERE deleted_at IS NULL AND created_at IS NOT NULL
+       GROUP BY 1, 2
+       ORDER BY 1`,
+      [b]
+    ),
+    pool.query(
+      `SELECT (SELECT count(*)::int FROM pages WHERE deleted_at IS NULL) AS total,
+              count(*)::int AS dated,
+              min(created_at) AS first, max(created_at) AS last
+       FROM pages WHERE deleted_at IS NULL AND created_at IS NOT NULL`
+    ),
+    pool.query(
+      `SELECT id, title, type, created_at
+       FROM pages
+       WHERE deleted_at IS NULL AND created_at IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 40`
+    ),
+  ]);
+
+  const typeTotals = new Map<string, number>();
+  const pointMap = new Map<string, HistoryPoint>();
+  for (const r of series.rows) {
+    const key = (r.period as Date).toISOString();
+    let p = pointMap.get(key);
+    if (!p) {
+      p = { period: key, total: 0, byType: {} };
+      pointMap.set(key, p);
+    }
+    p.byType[r.type] = (p.byType[r.type] ?? 0) + r.count;
+    p.total += r.count;
+    typeTotals.set(r.type, (typeTotals.get(r.type) ?? 0) + r.count);
+  }
+  const points = [...pointMap.values()].sort((a, c) => a.period.localeCompare(c.period));
+  let run = 0;
+  const cumulative = points.map((p) => (run += p.total));
+  const types = [...typeTotals.entries()].sort((a, c) => c[1] - a[1]).map(([t]) => t);
+
+  const s = span.rows[0];
+  return {
+    bucket: b,
+    types,
+    points,
+    cumulative,
+    totalPages: s.total,
+    datedPages: s.dated,
+    firstAt: s.first ? (s.first as Date).toISOString() : null,
+    lastAt: s.last ? (s.last as Date).toISOString() : null,
+    recent: recent.rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      type: r.type,
+      created_at: (r.created_at as Date).toISOString(),
+    })),
+  };
+}
+
+/** Breakdown of the content present in the DB: page types, link types, tags. */
+export async function getContentTypes(): Promise<ContentTypes> {
+  const pool = getPool();
+  const [typesRes, linkRes, tagsRes, totals] = await Promise.all([
+    pool.query(
+      `WITH ranked AS (
+         SELECT type, title,
+                row_number() OVER (
+                  PARTITION BY type ORDER BY created_at DESC NULLS LAST, id DESC
+                ) AS rn,
+                count(*) OVER (PARTITION BY type) AS cnt
+         FROM pages WHERE deleted_at IS NULL
+       )
+       SELECT type, max(cnt)::int AS count,
+              array_agg(title ORDER BY rn) FILTER (WHERE rn <= 5) AS samples
+       FROM ranked
+       GROUP BY type
+       ORDER BY count DESC`
+    ),
+    pool.query(
+      `SELECT link_type, count(*)::int AS count FROM links GROUP BY link_type ORDER BY count DESC`
+    ),
+    pool.query(
+      `SELECT t.tag, count(*)::int AS count
+       FROM tags t JOIN pages p ON p.id = t.page_id AND p.deleted_at IS NULL
+       GROUP BY t.tag
+       ORDER BY count DESC, t.tag
+       LIMIT 60`
+    ),
+    pool.query(
+      `SELECT (SELECT count(*)::int FROM pages WHERE deleted_at IS NULL) AS pages,
+              (SELECT count(*)::int FROM links) AS links,
+              (SELECT count(DISTINCT t.page_id)::int
+                 FROM tags t JOIN pages p ON p.id = t.page_id AND p.deleted_at IS NULL) AS tagged`
+    ),
+  ]);
+  return {
+    totalPages: totals.rows[0].pages,
+    totalLinks: totals.rows[0].links,
+    taggedPages: totals.rows[0].tagged,
+    types: typesRes.rows.map((r) => ({
+      type: r.type,
+      count: r.count,
+      samples: r.samples ?? [],
+    })),
+    linkTypes: linkRes.rows,
+    tags: tagsRes.rows,
+  };
 }
 
 export async function getStats(): Promise<Stats> {

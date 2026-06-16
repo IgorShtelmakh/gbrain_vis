@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AskResponse, GEdge, GNode, SearchResult, Stats } from "@/lib/types";
 import { typeColor } from "./GraphView";
+import NavBar from "./NavBar";
 import NodePanel from "./NodePanel";
 import SearchPanel from "./SearchPanel";
 
@@ -177,11 +178,8 @@ export default function GraphExplorer() {
 
       {/* header */}
       <header className="absolute top-0 inset-x-0 z-10 flex items-center gap-3 px-4 py-3 pointer-events-none">
-        <div className="pointer-events-auto flex items-center gap-2 panel px-3 py-2">
-          <span className="text-lg leading-none">🧠</span>
-          <span className="text-sm font-semibold text-slate-100 tracking-tight">
-            gbrain<span className="text-violet-400">·</span>explorer
-          </span>
+        <div className="pointer-events-auto">
+          <NavBar />
         </div>
 
         <form

@@ -5,6 +5,7 @@ import type Graph from "graphology";
 import type Sigma from "sigma";
 import type FA2Layout from "graphology-layout-forceatlas2/worker";
 import type { GEdge, GNode } from "@/lib/types";
+import { TYPE_COLORS, typeColor } from "@/lib/colors";
 
 // sigma touches WebGL globals at import time, so it must never load during SSR
 type GraphLibs = {
@@ -31,23 +32,9 @@ function loadLibs(): Promise<GraphLibs> {
   return libsPromise;
 }
 
-export const TYPE_COLORS: Record<string, string> = {
-  concept: "#8b7cf6",
-  "php-source": "#f59e0b",
-  person: "#34d399",
-  company: "#38bdf8",
-  note: "#f472b6",
-};
-const FALLBACK_COLORS = ["#22d3ee", "#fb7185", "#a3e635", "#fbbf24", "#c084fc"];
-const colorCache = new Map<string, string>();
-
-export function typeColor(type: string): string {
-  if (TYPE_COLORS[type]) return TYPE_COLORS[type];
-  if (!colorCache.has(type)) {
-    colorCache.set(type, FALLBACK_COLORS[colorCache.size % FALLBACK_COLORS.length]);
-  }
-  return colorCache.get(type)!;
-}
+// Re-exported so existing `./GraphView` imports keep resolving; the source of
+// truth is the server-safe @/lib/colors module (also used by section pages).
+export { TYPE_COLORS, typeColor };
 
 const DIM_NODE = "#252b42";
 const DIM_EDGE = "#1a2036";

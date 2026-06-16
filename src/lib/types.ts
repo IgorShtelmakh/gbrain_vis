@@ -62,3 +62,53 @@ export type Stats = {
   totalPages: number;
   totalLinks: number;
 };
+
+// --- History (timeline of when knowledge was added) ---
+export type HistoryBucket = "day" | "week" | "month";
+
+export type HistoryPoint = {
+  /** ISO timestamp at the start of the bucket */
+  period: string;
+  total: number;
+  byType: Record<string, number>;
+};
+
+export type RecentPage = {
+  id: number;
+  title: string;
+  type: string;
+  created_at: string;
+};
+
+export type History = {
+  bucket: HistoryBucket;
+  /** all types that appear, ordered by total additions desc */
+  types: string[];
+  points: HistoryPoint[];
+  /** running total aligned 1:1 with points */
+  cumulative: number[];
+  totalPages: number;
+  datedPages: number;
+  firstAt: string | null;
+  lastAt: string | null;
+  recent: RecentPage[];
+};
+
+// --- Content types present in the DB ---
+export type TypeBreakdown = {
+  type: string;
+  count: number;
+  /** a few example page titles, most-recent first */
+  samples: string[];
+};
+
+export type TagCount = { tag: string; count: number };
+
+export type ContentTypes = {
+  totalPages: number;
+  totalLinks: number;
+  taggedPages: number;
+  types: TypeBreakdown[];
+  linkTypes: { link_type: string; count: number }[];
+  tags: TagCount[];
+};
