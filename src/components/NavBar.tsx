@@ -49,6 +49,15 @@ export default function NavBar() {
           );
         })}
       </div>
+      <form action="/api/auth/logout" method="post" className="ml-0.5">
+        <button
+          type="submit"
+          title="Log out"
+          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition-colors hover:bg-white/5 hover:text-slate-200"
+        >
+          Log out
+        </button>
+      </form>
     </nav>
   );
 }

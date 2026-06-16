@@ -42,8 +42,9 @@ docker image prune -f >/dev/null
 
 echo "==> Waiting for app to become ready"
 for i in $(seq 1 30); do
+  # /login is always public (the password gate redirects other paths to it).
   code=$(docker run --rm --network contact-finder-agent_default curlimages/curl:latest \
-           -s -o /dev/null -w '%{http_code}' http://gbrain_vis:3000/ 2>/dev/null || echo 000)
+           -s -o /dev/null -w '%{http_code}' http://gbrain_vis:3000/login 2>/dev/null || echo 000)
   if [ "$code" = "200" ]; then
     echo "==> Healthy (HTTP 200). Live at https://gbrain.respaid.com"
     exit 0
