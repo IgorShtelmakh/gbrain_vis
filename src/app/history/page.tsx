@@ -2,12 +2,13 @@ import Link from "next/link";
 import SectionShell from "@/components/SectionShell";
 import { getHistory } from "@/lib/queries";
 import { typeColor } from "@/lib/colors";
-import type { HistoryBucket } from "@/lib/types";
+import type { HistoryBucket, HistoryMetric, RecentPage } from "@/lib/types";
 
 // Reads the live DB on each request — never prerender at build time.
 export const dynamic = "force-dynamic";
 
 const BUCKETS: HistoryBucket[] = ["day", "week", "month"];
+const METRICS: HistoryMetric[] = ["created", "updated"];
 const CHART_H = 240; // px
 
 function fmtPeriod(iso: string, bucket: HistoryBucket): string {
@@ -32,14 +33,18 @@ function fmtDate(iso: string): string {
 export default async function HistoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ bucket?: string }>;
+  searchParams: Promise<{ bucket?: string; metric?: string }>;
 }) {
   const sp = await searchParams;
   const bucket: HistoryBucket = BUCKETS.includes(sp.bucket as HistoryBucket)
     ? (sp.bucket as HistoryBucket)
     : "month";
-  const h = await getHistory(bucket);
+  const metric: HistoryMetric = METRICS.includes(sp.metric as HistoryMetric)
+    ? (sp.metric as HistoryMetric)
+    : "created";
+  const h = await getHistory(bucket, metric);
 
+  const verb = metric === "updated" ? "updated" : "added"; // past tense for labels
   const maxTotal = Math.max(1, ...h.points.map((p) => p.total));
   const labelStep = Math.max(1, Math.ceil(h.points.length / 16));
   const undated = h.totalPages - h.datedPages;
@@ -47,23 +52,45 @@ export default async function HistoryPage({
   return (
     <SectionShell
       title="History"
-      subtitle="When knowledge was added to the brain, by the page's creation date."
+      subtitle={
+        metric === "updated"
+          ? "When knowledge was last changed, by the page's update date."
+          : "When knowledge was added to the brain, by the page's creation date."
+      }
       actions={
-        <div className="flex items-center gap-1 panel p-1">
-          {BUCKETS.map((b) => (
-            <Link
-              key={b}
-              href={`/history?bucket=${b}`}
-              aria-current={b === bucket ? "page" : undefined}
-              className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors ${
-                b === bucket
-                  ? "bg-violet-500/20 text-violet-200"
-                  : "text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-            >
-              {b}
-            </Link>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 panel p-1">
+            {METRICS.map((m) => (
+              <Link
+                key={m}
+                href={`/history?bucket=${bucket}&metric=${m}`}
+                aria-current={m === metric ? "page" : undefined}
+                className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                  m === metric
+                    ? "bg-violet-500/20 text-violet-200"
+                    : "text-slate-400 hover:text-slate-100 hover:bg-white/5"
+                }`}
+              >
+                {m}
+              </Link>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 panel p-1">
+            {BUCKETS.map((b) => (
+              <Link
+                key={b}
+                href={`/history?bucket=${b}&metric=${metric}`}
+                aria-current={b === bucket ? "page" : undefined}
+                className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                  b === bucket
+                    ? "bg-violet-500/20 text-violet-200"
+                    : "text-slate-400 hover:text-slate-100 hover:bg-white/5"
+                }`}
+              >
+                {b}
+              </Link>
+            ))}
+          </div>
         </div>
       }
     >
@@ -75,15 +102,15 @@ export default async function HistoryPage({
           value={h.datedPages.toLocaleString()}
           hint={undated > 0 ? `${undated.toLocaleString()} undated` : undefined}
         />
-        <Stat label="First added" value={h.firstAt ? fmtDate(h.firstAt) : "—"} />
-        <Stat label="Latest added" value={h.lastAt ? fmtDate(h.lastAt) : "—"} />
+        <Stat label={`First ${verb}`} value={h.firstAt ? fmtDate(h.firstAt) : "—"} />
+        <Stat label={`Latest ${verb}`} value={h.lastAt ? fmtDate(h.lastAt) : "—"} />
       </div>
 
       {/* chart */}
       <section className="panel mt-6 p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-slate-200">
-            Pages added per {bucket}
+            Pages {verb} per {bucket}
           </h2>
           <p className="text-xs text-slate-500">
             stacked by type · hover a bar for the running total
@@ -92,7 +119,7 @@ export default async function HistoryPage({
 
         {h.points.length === 0 ? (
           <p className="py-10 text-center text-sm text-slate-500">
-            No creation timestamps recorded on pages.
+            No {metric === "updated" ? "update" : "creation"} timestamps recorded on pages.
           </p>
         ) : (
           <>
@@ -157,28 +184,62 @@ export default async function HistoryPage({
         )}
       </section>
 
-      {/* recent additions */}
-      <section className="panel mt-6 p-5">
-        <h2 className="mb-3 text-sm font-semibold text-slate-200">Recently added</h2>
-        <ul className="divide-y divide-white/5">
-          {h.recent.map((r) => (
-            <li key={r.id} className="flex items-center gap-3 py-2">
-              <span
-                className="size-2 shrink-0 rounded-full"
-                style={{ background: typeColor(r.type) }}
-              />
-              <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
-                {r.title}
-              </span>
-              <span className="shrink-0 text-xs text-slate-600">{r.type}</span>
-              <span className="shrink-0 tabular-nums text-xs text-slate-500">
-                {fmtDate(r.created_at)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {/* recent additions & updates, side by side */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <RecentList title="Recently added" pages={h.recent} field="created_at" />
+        <RecentList
+          title="Recently updated"
+          pages={h.recentUpdated}
+          field="updated_at"
+          emptyHint="No pages have been edited since they were created."
+        />
+      </div>
     </SectionShell>
+  );
+}
+
+function RecentList({
+  title,
+  pages,
+  field,
+  emptyHint = "Nothing yet.",
+}: {
+  title: string;
+  pages: RecentPage[];
+  field: "created_at" | "updated_at";
+  emptyHint?: string;
+}) {
+  return (
+    <section className="panel p-5">
+      <h2 className="mb-3 text-sm font-semibold text-slate-200">{title}</h2>
+      {pages.length === 0 ? (
+        <p className="py-6 text-center text-sm text-slate-500">{emptyHint}</p>
+      ) : (
+        <ul className="divide-y divide-white/5">
+          {pages.map((r) => {
+            const ts = r[field];
+            return (
+              <li key={r.id} className="flex items-center gap-3 py-2">
+                <span
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ background: typeColor(r.type) }}
+                />
+                <Link
+                  href={`/page/${r.id}`}
+                  className="min-w-0 flex-1 truncate text-sm text-slate-200 hover:text-violet-200"
+                >
+                  {r.title}
+                </Link>
+                <span className="shrink-0 text-xs text-slate-600">{r.type}</span>
+                <span className="shrink-0 tabular-nums text-xs text-slate-500">
+                  {ts ? fmtDate(ts) : "—"}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

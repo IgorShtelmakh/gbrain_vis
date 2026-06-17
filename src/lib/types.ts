@@ -65,6 +65,8 @@ export type Stats = {
 
 // --- History (timeline of when knowledge was added) ---
 export type HistoryBucket = "day" | "week" | "month";
+/** Which timestamp the timeline & stats are built on. */
+export type HistoryMetric = "created" | "updated";
 
 export type HistoryPoint = {
   /** ISO timestamp at the start of the bucket */
@@ -78,10 +80,12 @@ export type RecentPage = {
   title: string;
   type: string;
   created_at: string;
+  updated_at: string | null;
 };
 
 export type History = {
   bucket: HistoryBucket;
+  metric: HistoryMetric;
   /** all types that appear, ordered by total additions desc */
   types: string[];
   points: HistoryPoint[];
@@ -91,7 +95,10 @@ export type History = {
   datedPages: number;
   firstAt: string | null;
   lastAt: string | null;
+  /** most-recently created pages */
   recent: RecentPage[];
+  /** most-recently updated pages (edited after creation) */
+  recentUpdated: RecentPage[];
 };
 
 // --- Content types present in the DB ---
@@ -111,4 +118,73 @@ export type ContentTypes = {
   types: TypeBreakdown[];
   linkTypes: { link_type: string; count: number }[];
   tags: TagCount[];
+};
+
+// --- Health / status of the gbrain backend ---
+export type HealthStatus = {
+  /** overall: true only if the database is reachable */
+  ok: boolean;
+  /** ISO server timestamp when this check ran */
+  checkedAt: string;
+  db: {
+    connected: boolean;
+    /** round-trip time of the ping query, ms */
+    latencyMs: number | null;
+    /** the database's own clock, ISO */
+    serverTime: string | null;
+    /** Postgres version string */
+    version: string | null;
+    /** error message if the check failed */
+    error: string | null;
+  };
+  data: {
+    /** live (non-deleted) pages */
+    activePages: number;
+    deletedPages: number;
+    /** freshness signals — most recent ingest / edit */
+    lastCreatedAt: string | null;
+    lastUpdatedAt: string | null;
+  };
+  /** pg connection-pool gauges */
+  pool: {
+    total: number;
+    idle: number;
+    waiting: number;
+  };
+};
+
+// --- Indexation quality (how well the corpus is embedded, linked, dated) ---
+export type IndexScorePart = {
+  key: string;
+  label: string;
+  /** points awarded for this dimension */
+  points: number;
+  /** max points the dimension can contribute */
+  max: number;
+};
+
+export type IndexHealth = {
+  /** composite 0–100, sum of the parts */
+  score: number;
+  parts: IndexScorePart[];
+  totalPages: number;
+  /** % of pages with at least one embedded chunk */
+  embeddedPct: number;
+  /** pages that have chunks but none embedded yet */
+  missingEmbeddings: number;
+  /** pages chunked by an older chunker generation */
+  staleEmbeddings: number;
+  /** pages with no chunks at all — invisible to semantic search */
+  pagesWithoutChunks: number;
+  orphans: number;
+  totalLinks: number;
+  deadLinks: number;
+  /** pages that have at least one timeline entry */
+  timelinePages: number;
+  /** latest contradiction probe, if one has run */
+  contradictions: {
+    flagged: number;
+    queriesEvaluated: number;
+    ranAt: string;
+  } | null;
 };
