@@ -10,6 +10,9 @@ services:
     restart: unless-stopped
     expose:
       - "3000"
+    # Persists nightly control-eval results across image rebuilds.
+    volumes:
+      - eval_data:/data
     networks:
       proxy:
         aliases:
@@ -19,3 +22,6 @@ networks:
   proxy:
     external: true
     name: contact-finder-agent_default
+
+volumes:
+  eval_data:

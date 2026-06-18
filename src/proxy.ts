@@ -14,7 +14,13 @@ export function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
   // The login page and its endpoints must stay reachable while unauthenticated.
-  if (pathname === "/login" || pathname.startsWith("/api/auth/")) {
+  // The eval-cron endpoint is also exempt from the cookie gate — it enforces
+  // its own EVAL_CRON_TOKEN so the nightly job can reach it without a login.
+  if (
+    pathname === "/login" ||
+    pathname.startsWith("/api/auth/") ||
+    pathname === "/api/eval/run"
+  ) {
     return NextResponse.next();
   }
 

@@ -253,7 +253,9 @@ export async function synthesizeAnswer(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-fable-5",
+        // fable-5 requires special access this key lacks; sonnet-4-6 is the
+        // working default. Override with GBRAIN_ANSWER_MODEL.
+        model: process.env.GBRAIN_ANSWER_MODEL || "claude-sonnet-4-6",
         max_tokens: 1024,
         messages: [
           {

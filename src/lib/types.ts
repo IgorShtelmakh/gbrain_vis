@@ -188,3 +188,58 @@ export type IndexHealth = {
     ranAt: string;
   } | null;
 };
+
+// --- Control-question retrieval eval ("Garry scoring") ---
+// navigation -> graded on Hit@1 / Hit@3 (did retrieval surface the right page).
+// evidence & decode -> graded on cite / rule (did the answer cite a real
+// supporting source AND state the correct rule/diagnosis). Judging is
+// reference-free: an LLM judge reads the retrieved pages + synthesized answer.
+export type EvalCategory = "navigation" | "evidence" | "decode";
+
+export type ControlQuestion = {
+  id: number;
+  category: EvalCategory;
+  question: string;
+};
+
+/** A page that retrieval returned, with its 1-based rank. */
+export type EvalRetrieved = { id: number; title: string; type: string; rank: number };
+
+export type ControlQuestionResult = {
+  id: number;
+  category: EvalCategory;
+  question: string;
+  /** overall: navigation -> Hit@1; evidence/decode -> cite && rule */
+  passed: boolean;
+  // navigation axes (null for evidence/decode)
+  hit1: boolean | null;
+  hit3: boolean | null;
+  /** rank (1-based) of the page the judge deemed correct, or null if none */
+  answerRank: number | null;
+  answerPageId: number | null;
+  answerTitle: string | null;
+  // evidence/decode axes (null for navigation)
+  cite: boolean | null;
+  rule: boolean | null;
+  /** judge's one-line rationale */
+  notes: string;
+  /** top retrieved pages, for inspection */
+  retrieved: EvalRetrieved[];
+  /** set if grading this question threw */
+  error?: string | null;
+};
+
+export type ControlEvalRun = {
+  /** ISO timestamp the run started */
+  ranAt: string;
+  durationMs: number;
+  judgeModel: string;
+  /** the bar a navigation question must clear to pass: "hit1" or "hit3" */
+  navPass: "hit1" | "hit3";
+  /** number of questions that passed */
+  score: number;
+  /** number of questions evaluated */
+  total: number;
+  byCategory: { category: EvalCategory; passed: number; total: number }[];
+  questions: ControlQuestionResult[];
+};

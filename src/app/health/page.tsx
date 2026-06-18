@@ -1,7 +1,14 @@
 import Link from "next/link";
 import SectionShell from "@/components/SectionShell";
 import { getHealth, getIndexHealth } from "@/lib/queries";
-import type { IndexHealth } from "@/lib/types";
+import { readLatestEval } from "@/lib/eval";
+import { CONTROL_QUESTIONS } from "@/lib/controlQuestions";
+import type {
+  ControlEvalRun,
+  ControlQuestionResult,
+  EvalCategory,
+  IndexHealth,
+} from "@/lib/types";
 
 // Always probe the live backend — never serve a cached status.
 export const dynamic = "force-dynamic";
@@ -33,7 +40,11 @@ function fmtDateTime(iso: string): string {
 const STALE_DAYS = 14;
 
 export default async function HealthPage() {
-  const [h, index] = await Promise.all([getHealth(), getIndexHealth()]);
+  const [h, index, evalRun] = await Promise.all([
+    getHealth(),
+    getIndexHealth(),
+    readLatestEval(),
+  ]);
   const { db, data, pool } = h;
 
   const lastActivity = data.lastUpdatedAt ?? data.lastCreatedAt;
@@ -98,6 +109,9 @@ export default async function HealthPage() {
           {db.error}
         </pre>
       )}
+
+      {/* control-question retrieval eval */}
+      <ControlEval run={evalRun} checkedAt={h.checkedAt} />
 
       {/* indexation quality */}
       {index && <Indexation index={index} checkedAt={h.checkedAt} />}
@@ -203,6 +217,150 @@ function scoreTone(score: number): { text: string; bar: string } {
   if (score >= 85) return { text: "text-emerald-300", bar: "bg-emerald-400" };
   if (score >= 60) return { text: "text-amber-300", bar: "bg-amber-400" };
   return { text: "text-red-300", bar: "bg-red-400" };
+}
+
+const CAT_ORDER: EvalCategory[] = ["navigation", "evidence", "decode"];
+
+function StatusMark({ passed }: { passed: boolean | null }) {
+  if (passed === null) return <span className="mt-px shrink-0 text-slate-600">○</span>;
+  return passed ? (
+    <span className="mt-px shrink-0 text-emerald-400">✓</span>
+  ) : (
+    <span className="mt-px shrink-0 text-red-400">✗</span>
+  );
+}
+
+function Axis({ label, v }: { label: string; v: boolean | null }) {
+  const mark = v === null ? "–" : v ? "✓" : "✗";
+  const cls = v === null ? "text-slate-600" : v ? "text-emerald-400" : "text-red-400";
+  return (
+    <span className="text-slate-500">
+      {label} <span className={cls}>{mark}</span>
+    </span>
+  );
+}
+
+function QuestionRow({
+  question,
+  category,
+  result,
+}: {
+  question: string;
+  category: EvalCategory;
+  result: ControlQuestionResult | null;
+}) {
+  const tip = result
+    ? [result.notes, result.answerTitle ? `→ ${result.answerTitle}` : "", result.error ?? ""]
+        .filter(Boolean)
+        .join(" ")
+    : undefined;
+  return (
+    <li className="flex items-start gap-2 py-0.5 text-xs" title={tip}>
+      <StatusMark passed={result?.passed ?? null} />
+      <span className="min-w-0 flex-1 text-slate-300">{question}</span>
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-[11px]">
+        {category === "navigation" ? (
+          <>
+            <Axis label="Hit@1" v={result?.hit1 ?? null} />{" · "}
+            <Axis label="Hit@3" v={result?.hit3 ?? null} />
+          </>
+        ) : (
+          <>
+            <Axis label="cite" v={result?.cite ?? null} />{" · "}
+            <Axis label="rule" v={result?.rule ?? null} />
+          </>
+        )}
+      </span>
+    </li>
+  );
+}
+
+function ControlEval({ run, checkedAt }: { run: ControlEvalRun | null; checkedAt: string }) {
+  const pct = run && run.total ? Math.round((run.score / run.total) * 100) : 0;
+  // 20/20 is the goal, so reward a perfect run with the top tone explicitly.
+  const tone = scoreTone(run && run.score === run.total ? 100 : pct);
+  const byId = new Map((run?.questions ?? []).map((q) => [q.id, q]));
+
+  return (
+    <section className="panel mt-6 p-5">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-200">Retrieval eval</h2>
+          <p className="text-[11px] text-slate-500">
+            Garry scoring · {CONTROL_QUESTIONS.length} control questions ·{" "}
+            {run
+              ? `judged by ${run.judgeModel} · navigation passes on ${
+                  run.navPass === "hit1" ? "Hit@1" : "Hit@3"
+                }`
+              : "runs nightly"}
+          </p>
+        </div>
+        {run ? (
+          <div className="flex items-center gap-5">
+            <div className="flex gap-3">
+              {run.byCategory.map((c) => (
+                <span key={c.category} className="text-[11px] text-slate-500">
+                  {c.category}{" "}
+                  <span className="tabular-nums text-slate-300">
+                    {c.passed}/{c.total}
+                  </span>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className={`text-3xl font-semibold tabular-nums ${tone.text}`}>
+                {run.score}
+              </span>
+              <span className="text-sm text-slate-500">/{run.total}</span>
+            </div>
+          </div>
+        ) : (
+          <span className="rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+            not yet evaluated
+          </span>
+        )}
+      </div>
+
+      {run && (
+        <p className="mb-4 text-[11px] text-slate-600">
+          last run {fmtAgo(run.ranAt, checkedAt)} ({fmtDateTime(run.ranAt)} UTC) ·{" "}
+          {(run.durationMs / 1000).toFixed(0)}s
+        </p>
+      )}
+
+      <div className="mt-3 space-y-4">
+        {CAT_ORDER.map((cat) => {
+          const qs = CONTROL_QUESTIONS.filter((q) => q.category === cat);
+          if (qs.length === 0) return null;
+          return (
+            <div key={cat}>
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-600">
+                {cat}
+              </div>
+              <ul className="divide-y divide-white/5">
+                {qs.map((q) => (
+                  <QuestionRow
+                    key={q.id}
+                    question={q.question}
+                    category={cat}
+                    result={byId.get(q.id) ?? null}
+                  />
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+
+      {!run && (
+        <p className="mt-4 text-[11px] text-slate-600">
+          No run recorded yet — the eval runs nightly, or trigger it with{" "}
+          <code className="text-slate-400">POST /api/eval/run</code> (header{" "}
+          <code className="text-slate-400">x-eval-token</code>).
+        </p>
+      )}
+    </section>
+  );
 }
 
 function Indexation({ index, checkedAt }: { index: IndexHealth; checkedAt: string }) {
