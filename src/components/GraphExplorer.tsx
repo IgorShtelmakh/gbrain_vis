@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AskResponse, GEdge, GNode, SearchResult, Stats } from "@/lib/types";
+import type { AnswerResponse, AskResponse, GEdge, GNode, SearchResult, Stats } from "@/lib/types";
 import { typeColor } from "./GraphView";
 import NavBar from "./NavBar";
 import NodePanel from "./NodePanel";
@@ -29,6 +29,10 @@ export default function GraphExplorer() {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const [highlightIds, setHighlightIds] = useState<number[] | null>(null);
+  // whether the search panel is open, and which of its two sections are still loading
+  const [showSearch, setShowSearch] = useState(false);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [answerLoading, setAnswerLoading] = useState(false);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [focusToken, setFocusToken] = useState(0);
@@ -71,6 +75,7 @@ export default function GraphExplorer() {
       setAnswer(null);
       setHighlightIds(null);
       setSelectedId(null);
+      setShowSearch(false);
     } catch {
       setError("Could not reach the gbrain database.");
     } finally {
@@ -92,9 +97,18 @@ export default function GraphExplorer() {
   const ask = useCallback(async (question: string) => {
     const q = question.trim();
     if (!q) return;
-    setLoading(true);
+    // Open the panel right away with both sections in a loading state — the
+    // graph stays interactive (no full-screen overlay) while the search runs.
     setError(null);
+    setMode({ kind: "query", query: q });
+    setResults(null);
+    setAnswer(null);
+    setHighlightIds(null);
+    setShowSearch(true);
+    setMatchesLoading(true);
+    setAnswerLoading(true);
     try {
+      // phase 1 — matches + subgraph (fast): paint these as soon as they land
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,19 +119,38 @@ export default function GraphExplorer() {
       setNodes(data.subgraph.nodes);
       setEdges(data.subgraph.edges);
       setResults(data.results);
-      setAnswer(data.answer);
       setHighlightIds(data.results.map((r) => r.id));
-      setMode({ kind: "query", query: q });
       if (data.results.length > 0) {
         setSelectedId(data.results[0].id);
         setFocusToken((t) => t + 1);
       } else {
         setSelectedId(null);
       }
+      setMatchesLoading(false);
+
+      // phase 2 — synthesized answer (slow LLM call): nothing to synthesize
+      // from when there are no matches
+      if (data.results.length === 0) {
+        setAnswerLoading(false);
+        return;
+      }
+      try {
+        const ares = await fetch("/api/answer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: q, results: data.results }),
+        });
+        const adata: AnswerResponse & { error?: string } = await ares.json();
+        setAnswer(adata.error ? null : adata.answer);
+      } catch {
+        setAnswer(null);
+      } finally {
+        setAnswerLoading(false);
+      }
     } catch {
       setError("Search failed — try rephrasing.");
-    } finally {
-      setLoading(false);
+      setMatchesLoading(false);
+      setAnswerLoading(false);
     }
   }, []);
 
@@ -264,15 +297,17 @@ export default function GraphExplorer() {
 
       {/* right column: results + node detail */}
       <aside className="absolute top-16 bottom-4 right-4 z-10 w-[360px] max-w-[90vw] flex flex-col gap-3 pointer-events-none [&>*]:pointer-events-auto">
-        {results && mode.kind === "query" && (
+        {showSearch && mode.kind === "query" && (
           <SearchPanel
             query={mode.query}
             results={results}
             answer={answer}
+            matchesLoading={matchesLoading}
+            answerLoading={answerLoading}
             selectedId={selectedId}
             onSelect={(id) => selectNode(id, true)}
             onClose={() => {
-              setResults(null);
+              setShowSearch(false);
               setHighlightIds(null);
             }}
           />
@@ -292,9 +327,7 @@ export default function GraphExplorer() {
         <div className="absolute inset-0 z-20 grid place-items-center bg-[#080b14]/60 backdrop-blur-[2px]">
           <div className="panel flex items-center gap-3 px-5 py-3">
             <span className="size-4 rounded-full border-2 border-violet-400 border-t-transparent animate-spin" />
-            <span className="text-sm text-slate-300">
-              {mode.kind === "query" || input ? "Searching the brain…" : "Mapping the brain…"}
-            </span>
+            <span className="text-sm text-slate-300">Mapping the brain…</span>
           </div>
         </div>
       )}

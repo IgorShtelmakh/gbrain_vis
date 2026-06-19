@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSubgraphAround, hybridSearch, synthesizeAnswer } from "@/lib/queries";
+import { getSubgraphAround, hybridSearch } from "@/lib/queries";
 import type { AskResponse } from "@/lib/types";
 
+// Fast phase of a search: returns the matches + the subgraph to render so the
+// UI can paint them immediately. The synthesized answer is fetched separately
+// from /api/answer so the slow LLM call doesn't block the matches.
 export async function POST(req: NextRequest) {
   let question: string;
   try {
@@ -14,11 +17,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const results = await hybridSearch(question, 12);
-    const [subgraph, answer] = await Promise.all([
-      getSubgraphAround(results.map((r) => r.id)),
-      synthesizeAnswer(question, results),
-    ]);
-    const res: AskResponse = { results, subgraph, answer };
+    const subgraph = await getSubgraphAround(results.map((r) => r.id));
+    const res: AskResponse = { results, subgraph };
     return NextResponse.json(res);
   } catch (e) {
     console.error(e);

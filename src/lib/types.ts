@@ -27,9 +27,14 @@ export type SearchResult = {
   snippet: string | null;
 };
 
+/** Fast phase of a search: matches + the subgraph to render. */
 export type AskResponse = {
   results: SearchResult[];
   subgraph: SubGraph;
+};
+
+/** Slow phase: the LLM answer synthesized from the matches. */
+export type AnswerResponse = {
   answer: string | null;
 };
 
