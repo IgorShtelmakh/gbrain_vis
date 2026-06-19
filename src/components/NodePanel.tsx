@@ -71,13 +71,21 @@ export default function NodePanel({ nodeId, onClose, onExpand, onNavigate }: Pro
       </div>
 
       {view && (
-        <div className="px-4 pb-2 shrink-0">
+        <div className="px-4 pb-2 shrink-0 space-y-1.5">
           <button
             onClick={() => onExpand(view.id)}
             className="w-full rounded-lg bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 text-xs font-medium py-1.5 transition-colors"
           >
             ⊕ Expand neighbors into graph
           </button>
+          {(view.type === "php-source" || view.type === "code") && (
+            <a
+              href={`/code?page=${view.id}`}
+              className="block w-full rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-medium py-1.5 text-center transition-colors"
+            >
+              🕸️ View call graph
+            </a>
+          )}
         </div>
       )}
 

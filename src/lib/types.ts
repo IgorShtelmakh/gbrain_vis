@@ -38,6 +38,55 @@ export type AnswerResponse = {
   answer: string | null;
 };
 
+// --- Code call graph (symbol -> symbol "calls"/"references" edges) ---
+/** A symbol you can center the call-graph on (an internal, page-backed symbol). */
+export type SymbolHit = {
+  /** fully-qualified symbol name — the call graph's node id */
+  symbol: string;
+  /** short display name (last path segment) */
+  label: string;
+  /** the page that defines it, if we have one */
+  pageId: number | null;
+  pageType: string | null;
+  /** how many edges touch it overall (caller + callee count) */
+  degree: number;
+};
+
+export type CallNode = {
+  /** fully-qualified symbol name — unique node id */
+  symbol: string;
+  label: string;
+  /** true if no page in our corpus defines it (a framework/external leaf) */
+  external: boolean;
+  pageId: number | null;
+  pageType: string | null;
+  /** source file of the definition, if known */
+  file: string | null;
+  /** BFS distance from the centered symbol (0 = center) */
+  depth: number;
+  /** callers / callees within this subgraph */
+  inDegree: number;
+  outDegree: number;
+};
+
+export type CallEdgeKind = "calls" | "references";
+
+export type CallEdge = {
+  from: string;
+  to: string;
+  kind: CallEdgeKind | string;
+};
+
+/** An ego call-graph centered on one symbol. */
+export type CallGraph = {
+  center: string;
+  depth: number;
+  nodes: CallNode[];
+  edges: CallEdge[];
+  /** true if the node set was capped for legibility */
+  truncated: boolean;
+};
+
 export type Connection = {
   id: number;
   title: string;

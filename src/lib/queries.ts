@@ -1,5 +1,7 @@
 import { getPool } from "./db";
 import type {
+  CallGraph,
+  CallNode,
   ContentTypes,
   GEdge,
   GNode,
@@ -13,6 +15,7 @@ import type {
   SearchResult,
   Stats,
   SubGraph,
+  SymbolHit,
   TagCount,
 } from "./types";
 
@@ -671,4 +674,179 @@ export async function getIndexHealth(): Promise<IndexHealth | null> {
     console.error("Index health failed:", e);
     return null;
   }
+}
+
+// --- Code call graph -------------------------------------------------------
+// Symbol-level "calls"/"references" edges live in code_edges_symbol, keyed on
+// fully-qualified symbol names. A symbol is "internal" when our corpus has a
+// page (content_chunks row) defining it; everything else (Log, Carbon, …) is an
+// external framework leaf. We only ever EXPAND internal symbols during the BFS,
+// so framework hubs stay leaves instead of dragging in their hundreds of
+// unrelated callers.
+
+/** Short, human display name from a qualified symbol (last path segment). */
+function shortSymbol(qualified: string): string {
+  const parts = qualified.split(/\\|\/|::/).filter(Boolean);
+  return parts[parts.length - 1] || qualified;
+}
+
+/** Symbols you can center the call graph on — internal, page-backed definitions. */
+export async function searchSymbols(q: string, limit = 20): Promise<SymbolHit[]> {
+  const { rows } = await getPool().query(
+    `SELECT c.symbol_name_qualified AS symbol,
+            (array_agg(c.symbol_name ORDER BY c.chunk_index))[1] AS label,
+            min(c.page_id) AS page_id,
+            (array_agg(p.type ORDER BY c.chunk_index))[1] AS page_type,
+            (SELECT count(*)::int FROM code_edges_symbol e
+             WHERE e.from_symbol_qualified = c.symbol_name_qualified
+                OR e.to_symbol_qualified = c.symbol_name_qualified) AS degree
+     FROM content_chunks c
+     JOIN pages p ON p.id = c.page_id AND p.deleted_at IS NULL
+     WHERE c.symbol_name IS NOT NULL
+       AND c.symbol_name_qualified ILIKE '%' || $1 || '%'
+     GROUP BY c.symbol_name_qualified
+     ORDER BY degree DESC, count(*) DESC
+     LIMIT $2`,
+    [q, limit]
+  );
+  return rows.map((r) => ({
+    symbol: r.symbol,
+    label: r.label || shortSymbol(r.symbol),
+    pageId: r.page_id ?? null,
+    pageType: r.page_type ?? null,
+    degree: r.degree ?? 0,
+  }));
+}
+
+/** The qualified symbol a code page primarily defines (for "view call graph"). */
+export async function primarySymbolForPage(pageId: number): Promise<string | null> {
+  const { rows } = await getPool().query(
+    `SELECT symbol_name_qualified AS symbol
+     FROM content_chunks
+     WHERE page_id = $1 AND symbol_name IS NOT NULL AND symbol_name_qualified IS NOT NULL
+     GROUP BY symbol_name_qualified
+     ORDER BY count(*) DESC, min(chunk_index)
+     LIMIT 1`,
+    [pageId]
+  );
+  return rows[0]?.symbol ?? null;
+}
+
+// BFS over the (directed) call graph, walking BOTH directions but only
+// expanding internal symbols. Returns each reached symbol with its min depth.
+const CALLGRAPH_BFS = `
+WITH RECURSIVE frontier AS (
+  SELECT $1::text AS sym, 0 AS depth
+  UNION
+  SELECT CASE WHEN e.from_symbol_qualified = f.sym
+              THEN e.to_symbol_qualified ELSE e.from_symbol_qualified END AS sym,
+         f.depth + 1
+  FROM frontier f
+  JOIN code_edges_symbol e
+    ON e.from_symbol_qualified = f.sym OR e.to_symbol_qualified = f.sym
+  WHERE f.depth < $2
+    AND EXISTS (
+      SELECT 1 FROM content_chunks c
+      WHERE c.symbol_name_qualified = f.sym AND c.symbol_name IS NOT NULL
+    )
+)
+SELECT sym, min(depth) AS depth FROM frontier GROUP BY sym`;
+
+/** Ego call-graph centered on `symbol`, out to `depth` hops, capped at maxNodes. */
+export async function getCallGraph(
+  symbol: string,
+  depth = 2,
+  maxNodes = 120
+): Promise<CallGraph | null> {
+  const pool = getPool();
+  const d = Math.min(3, Math.max(1, depth));
+
+  const { rows: frontier } = await pool.query(CALLGRAPH_BFS, [symbol, d]);
+  if (frontier.length === 0) return null;
+
+  const depthBy = new Map<string, number>(frontier.map((r) => [r.sym, r.depth]));
+  let syms: string[] = frontier.map((r) => r.sym);
+
+  const { rows: edgeRows } = await pool.query(
+    `SELECT DISTINCT from_symbol_qualified AS f, to_symbol_qualified AS t, edge_type AS kind
+     FROM code_edges_symbol
+     WHERE from_symbol_qualified = ANY($1) AND to_symbol_qualified = ANY($1)`,
+    [syms]
+  );
+
+  // Cap for legibility: always keep the center + everything within 1 hop, then
+  // fill remaining slots with the most-connected deeper nodes.
+  let truncated = false;
+  if (syms.length > maxNodes) {
+    truncated = true;
+    const deg = new Map<string, number>();
+    for (const e of edgeRows) {
+      deg.set(e.f, (deg.get(e.f) ?? 0) + 1);
+      deg.set(e.t, (deg.get(e.t) ?? 0) + 1);
+    }
+    const keep = new Set<string>([symbol]);
+    for (const s of syms) if ((depthBy.get(s) ?? 99) <= 1) keep.add(s);
+    const rest = syms
+      .filter((s) => !keep.has(s))
+      .sort((a, b) => (deg.get(b) ?? 0) - (deg.get(a) ?? 0));
+    for (const s of rest) {
+      if (keep.size >= maxNodes) break;
+      keep.add(s);
+    }
+    syms = [...keep];
+  }
+  const symSet = new Set(syms);
+  const edges = edgeRows.filter((e) => symSet.has(e.f) && symSet.has(e.t) && e.f !== e.t);
+
+  // Resolve internal symbols -> defining page.
+  const { rows: resolved } = await pool.query(
+    `SELECT c.symbol_name_qualified AS sym, min(c.page_id) AS page_id,
+            (array_agg(p.type ORDER BY c.chunk_index))[1] AS page_type
+     FROM content_chunks c
+     JOIN pages p ON p.id = c.page_id AND p.deleted_at IS NULL
+     WHERE c.symbol_name_qualified = ANY($1) AND c.symbol_name IS NOT NULL
+     GROUP BY c.symbol_name_qualified`,
+    [syms]
+  );
+  const pageBy = new Map(resolved.map((r) => [r.sym, r]));
+
+  // A defining file per symbol, pulled from edge metadata.
+  const { rows: fileRows } = await pool.query(
+    `SELECT DISTINCT ON (from_symbol_qualified)
+            from_symbol_qualified AS sym, edge_metadata->>'from_file' AS file
+     FROM code_edges_symbol
+     WHERE from_symbol_qualified = ANY($1)`,
+    [syms]
+  );
+  const fileBy = new Map<string, string | null>(fileRows.map((r) => [r.sym, r.file]));
+
+  const inDeg = new Map<string, number>();
+  const outDeg = new Map<string, number>();
+  for (const e of edges) {
+    outDeg.set(e.f, (outDeg.get(e.f) ?? 0) + 1);
+    inDeg.set(e.t, (inDeg.get(e.t) ?? 0) + 1);
+  }
+
+  const nodes: CallNode[] = syms.map((sym) => {
+    const pg = pageBy.get(sym);
+    return {
+      symbol: sym,
+      label: shortSymbol(sym),
+      external: !pg,
+      pageId: pg ? pg.page_id : null,
+      pageType: pg ? pg.page_type : null,
+      file: fileBy.get(sym) ?? null,
+      depth: depthBy.get(sym) ?? 0,
+      inDegree: inDeg.get(sym) ?? 0,
+      outDegree: outDeg.get(sym) ?? 0,
+    };
+  });
+
+  return {
+    center: symbol,
+    depth: d,
+    nodes,
+    edges: edges.map((e) => ({ from: e.f, to: e.t, kind: e.kind })),
+    truncated,
+  };
 }
