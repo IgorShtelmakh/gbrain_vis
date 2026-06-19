@@ -147,13 +147,26 @@ async function vectorSearch(q: string, limit = 20): Promise<SearchResult[]> {
     }
     const data = await res.json();
     const embedding: number[] = data.data[0].embedding;
+    // Let the HNSW index (idx_chunks_embedding) pick the nearest chunks FIRST,
+    // then group those candidates by page. Grouping the whole table by page and
+    // ordering on an aggregate of the distance (the old shape) can't use the ANN
+    // index, so it brute-forced every chunk (~19s on 21k chunks). Over-fetch
+    // enough candidates to comfortably cover `limit` distinct, non-deleted pages.
+    const candidates = Math.max(400, limit * 16);
     const { rows } = await getPool().query(
       `WITH ${DEGREE_CTE},
-       hits AS (
-         SELECT cc.page_id, max(1 - (cc.embedding <=> $1::vector))::float AS sim,
-                (array_agg(left(cc.chunk_text, 300) ORDER BY cc.embedding <=> $1::vector))[1] AS snippet
+       nearest AS (
+         SELECT cc.page_id, cc.chunk_text, cc.embedding <=> $1::vector AS dist
          FROM content_chunks cc
-         GROUP BY cc.page_id
+         WHERE cc.embedding IS NOT NULL
+         ORDER BY cc.embedding <=> $1::vector
+         LIMIT $3
+       ),
+       hits AS (
+         SELECT n.page_id, (1 - min(n.dist))::float AS sim,
+                (array_agg(left(n.chunk_text, 300) ORDER BY n.dist))[1] AS snippet
+         FROM nearest n
+         GROUP BY n.page_id
          ORDER BY sim DESC
          LIMIT $2
        )
@@ -163,7 +176,7 @@ async function vectorSearch(q: string, limit = 20): Promise<SearchResult[]> {
        JOIN pages p ON p.id = h.page_id AND p.deleted_at IS NULL
        LEFT JOIN deg d ON d.page_id = p.id
        ORDER BY h.sim DESC`,
-      [JSON.stringify(embedding), limit]
+      [JSON.stringify(embedding), limit, candidates]
     );
     return rows;
   } catch (e) {
