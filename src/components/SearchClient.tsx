@@ -83,9 +83,12 @@ export default function SearchClient({ initialQuery }: { initialQuery: string })
     }
   }, []);
 
-  // run the search from the URL on first load (e.g. a shared /search?q=… link)
+  // run the search from the URL on first load (e.g. a shared /search?q=… link).
+  // deferred so we don't setState synchronously inside the effect body.
   useEffect(() => {
-    if (initialQuery.trim()) runSearch(initialQuery);
+    if (!initialQuery.trim()) return;
+    const id = window.setTimeout(() => runSearch(initialQuery), 0);
+    return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
